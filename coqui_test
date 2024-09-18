@@ -1,0 +1,46 @@
+import torch
+import intel_extension_for_pytorch as ipex
+print(torch.version)
+print(ipex.version)
+[print(f'[{i}]: {torch.xpu.get_device_properties(i)}') for i in range(torch.xpu.device_count())]
+
+from TTS.utils.manage import ModelManager
+from TTS.utils.synthesizer import Synthesizer
+#from IPython.display import Audio
+import numpy as np
+import soundfile as sf
+
+model_manager = ModelManager()
+model_path, config_path, model_item = model_manager.download_model("tts_models/en/vctk/vits")
+synthesizer = Synthesizer(model_path, config_path, use_cuda=False)
+
+synthesizer.tts_model.to('xpu')
+synthesizer.tts_model.eval() # Set the model to evaluation mode for inference
+#synthesizer.tts_model = ipex.optimize(synthesizer.tts_model, dtype=torch.float32)
+
+speaker_manager = synthesizer.tts_model.speaker_manager
+speaker_names = list(speaker_manager.name_to_id.keys())
+print("Available speaker names:", speaker_names)
+
+speaker_name = "p229" # Replace with the actual speaker name you want to use
+
+text = "Your last lap time was 117.547 seconds. That's a bit slower than your best, but you're still doing well. Keep pushing, a really good lap is around 100 seconds. You've got this, let's keep improving."
+
+with torch.no_grad(), torch.xpu.amp.autocast(enabled=False):
+    wavs = synthesizer.tts(text, speaker_name=speaker_name)
+
+if isinstance(wavs, list):
+    # Convert each NumPy array or scalar in the list to a PyTorch tensor
+    tensor_list = [torch.tensor(wav, dtype=torch.float32).unsqueeze(0) if np.isscalar(wav) else torch.tensor(wav, dtype=torch.float32) for wav in wavs]
+    # Concatenate the tensor list into a single tensor
+    wav_concatenated = torch.cat(tensor_list, dim=0)
+else:
+    # If 'wavs' is already a tensor, use it directly
+    wav_concatenated = wavs
+
+    #Move the tensor to CPU and convert to NumPy array
+    wav_concatenated = wav_concatenated.cpu().numpy()
+
+#Save the output to a WAV file
+output_path = "output_vctk_vits.wav"
+sf.write(output_path, wav_concatenated, synthesizer.tts_config.audio['sample_rate'])
